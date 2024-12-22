@@ -77,6 +77,7 @@ class HelloTriangleApplication {
         void initVulkan() {
             createInstance(); // Creates an instance of vulkan
             setupDebugMessenger(); // Creates the debug messenger
+            pickPhysicalDevice(); // Picks a graphics card
         }
 
 
@@ -273,6 +274,10 @@ class HelloTriangleApplication {
             std::cerr << "validation layer: " << pCallbackData->pMessage << std::endl;
 
             return VK_FALSE;
+        }
+
+        void pickPhysicalDevice(){
+            
         }
     };
 
