@@ -1,19 +1,37 @@
-CFLAGS = -std=c++23 -O2
-LDFLAGS = -lglfw -lvulkan -ldl -lpthread -lX11 -lXxf86vm -lXrandr -lXi
+CFLAGS = -std=c++23 -O2 # Defining the version of C++
+LDFLAGS = -lglfw -lvulkan -ldl -lpthread -lX11 -lXxf86vm -lXrandr -lXi # Defining the libraries used
 
+# -g is used by g++ to signal debug 
+# -UNDEBUG means NDEBUG is not defined for the compiled program
+DEBUG_PARAMETER = -g -UNDEBUG 
+
+# -DNDEBUG is used to define NDEBUG (not debug) to disable validation layers
+# NDEBUG is also tied with assertions
+RELEASE_PARAMETER = -DNDEBUG
+DEBUGFILE = VulkanTest	# Name of the compiled program in debug phase
+RELEASEFILE = VulkanTestR	# Name of the compiled program in release phase
+
+# Runs when running the "make" command in the directory 
+# Compiles the program with validation layers and debug
 VulkanTest: main.cpp
-	g++ $(CFLAGS) -g -UNDEBUG -o VulkanTest main.cpp $(LDFLAGS)
+	g++ $(CFLAGS) $(DEBUG_PARAMETER) -o $(DEBUGFILE) main.cpp $(LDFLAGS)
 
-.PHONY: test clean
+# Defines the additional functions that can be used with the "make" command
+# E.g.:  "make test" runs the test command defined below
+.PHONY: test clean release rel
 
+# For compiling program without validation layers
 release: 
-        g++ $(CFLAGS) -DNDEBUG -o VulkanTestR main.cpp $(LDFLAGS)
+	g++ $(CFLAGS) $(RELEASE_PARAMETER) -o $(RELEASEFILE) main.cpp $(LDFLAGS)
 
-test: VulkanTest
-	./VulkanTest
+# Runs the complied program with validation layers
+test: 
+	./$(DEBUGFILE)
 
+# Removes the compiled debug-program
 clean:
-	rm -f VulkanTest
+	rm -f $(DEBUGFILE)
 
-rel: VulkanTest
-	./VulkanTestR
+# Runs the compiled release-program
+rel: 
+	./$(RELEASEFILE)
