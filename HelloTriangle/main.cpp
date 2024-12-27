@@ -4,7 +4,8 @@
 // For catching and reporting errors
 #include <iostream>
 #include <stdexcept>
-#include <vector>
+#include <vector>   // For creating arrays
+#include <map>      // For creating maps
 #include <cstring>
 // For EXIT_SUCCESS and EXIT_FAILURE macros
 #include <cstdlib>
@@ -59,6 +60,7 @@ class HelloTriangleApplication {
         GLFWwindow* window; // GLFW window instance
         VkInstance instance; // Vulkan instance
         VkDebugUtilsMessengerEXT debugMessenger; // Debug callback
+        VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
 
         // This defines the parameters of glfw window
         void initWindow() {
@@ -277,7 +279,60 @@ class HelloTriangleApplication {
         }
 
         void pickPhysicalDevice(){
+            uint32_t deviceCount = 0; // Variable to store device that support vulkan
+            vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr); // Assign the count of graphics cards
+
+            // If no graphics cards that support vulkan are found
+            if (deviceCount == 0) {
+                throw std::runtime_error("failed to find GPUs with Vulkan support!");
+            }
+
+            std::vector<VkPhysicalDevice> devices(deviceCount); // Array to store graphics device handles
+            vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data()); // Store the GPU devices handles
             
+            // Use an ordered map to automatically sort candidates by increasing score
+            std::multimap<int, VkPhysicalDevice> candidates;
+
+            for (const auto& device : devices) {
+                int score = rateDeviceSuitability(device);
+                candidates.insert(std::make_pair(score, device));
+            }
+
+            // Check if the best candidate is suitable at all
+            if (candidates.rbegin()->first > 0) {
+                physicalDevice = candidates.rbegin()->second;
+            } else {
+                throw std::runtime_error("failed to find a suitable GPU!");
+            }
+
+        }
+
+        // Checks if the device is suitable for application
+        int rateDeviceSuitability(VkPhysicalDevice device) {
+            VkPhysicalDeviceProperties deviceProperties; // For storing the device's property
+            vkGetPhysicalDeviceProperties(device, &deviceProperties); // Gets the device's property
+
+            // For storing the features(texture compression, 64 bit floats and multi viewport rendering (useful for VR)) 
+            // supported by the device
+            VkPhysicalDeviceFeatures deviceFeatures; 
+            vkGetPhysicalDeviceFeatures(device, &deviceFeatures); // Getting the features supported
+
+            int score = 0;
+
+            // Discrete GPUs have a significant performance advantage
+            if (deviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
+                score += 1000;
+            }
+
+            // Maximum possible size of textures affects graphics quality
+            score += deviceProperties.limits.maxImageDimension2D;
+
+            // Application can't function without geometry shaders
+            if (!deviceFeatures.geometryShader) {
+                return 0;
+            }
+
+            return score;
         }
     };
 
