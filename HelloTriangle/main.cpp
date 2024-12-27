@@ -7,6 +7,7 @@
 #include <vector>   // For creating arrays
 #include <map>      // For creating maps
 #include <cstring>
+#include <optional> // For checking queue family
 // For EXIT_SUCCESS and EXIT_FAILURE macros
 #include <cstdlib>
 
@@ -292,7 +293,7 @@ class HelloTriangleApplication {
             
             // Use an ordered map to automatically sort candidates by increasing score
             std::multimap<int, VkPhysicalDevice> candidates;
-
+            // Loop over the devices and store the device and its rating in candidates arrary
             for (const auto& device : devices) {
                 int score = rateDeviceSuitability(device);
                 candidates.insert(std::make_pair(score, device));
@@ -304,7 +305,6 @@ class HelloTriangleApplication {
             } else {
                 throw std::runtime_error("failed to find a suitable GPU!");
             }
-
         }
 
         // Checks if the device is suitable for application
@@ -332,8 +332,54 @@ class HelloTriangleApplication {
                 return 0;
             }
 
+            // Finding queue family
+            QueueFamilyIndices indices = findQueueFamilies(device);
+            if (!indices.isComplete()) {
+                return 0;
+            }
+
             return score;
         }
+
+        struct QueueFamilyIndices {
+            // Stores the index of the queue family
+            // the optional uint32_t allows the functionality to check if
+            // the variable has a value assigned
+            std::optional<uint32_t> graphicsFamily;
+
+
+            bool isComplete() {
+                return graphicsFamily.has_value();
+            }
+        };
+
+        // Takes a graphics device and returns a struct with 
+        // index of the queue family needed
+        QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device) {
+            QueueFamilyIndices indices;
+            // Logic to find queue family indices to populate struct with
+            uint32_t queueFamilyCount = 0;  // Stores the count of available queue family supported by device
+            vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, nullptr);
+
+            std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount); // Array to store Queue families
+            vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamilies.data());
+            
+            // Finding a queue family that supports VK_QUEUE_GRAPHICS_BIT
+            int i = 0;
+            for (const auto& queueFamily : queueFamilies) {
+                if (queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+                    indices.graphicsFamily = i;
+                }
+
+                // If the queue family with the requirements is already assigned
+                if (indices.isComplete()) {
+                    break;
+                }
+
+                i++;
+            }
+            return indices;
+        } 
     };
 
 int main() {
