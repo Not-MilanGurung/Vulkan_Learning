@@ -8,6 +8,7 @@
 #include <map>      // For creating maps
 #include <cstring>
 #include <optional> // For checking queue family
+#include <set> // For creating sets
 // For EXIT_SUCCESS and EXIT_FAILURE macros
 #include <cstdlib>
 
@@ -58,12 +59,17 @@ class HelloTriangleApplication {
 
     private:
 
-        GLFWwindow* window; // GLFW window instance
+        GLFWwindow* window; // GLFW window instance \n Necessary to clean up
+
         VkInstance instance; // Vulkan instance \n Necessary to clean up
-        VkDebugUtilsMessengerEXT debugMessenger; // Debug callback
-        VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;   // The physical graphics device (GPU)
+        VkDebugUtilsMessengerEXT debugMessenger; // Debug callback \n Necessary to clean up
+        VkSurfaceKHR surface; // Window system integration surface \n Necessary to clean up
+
+        VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;   // The physical graphics device (GPU) \n Automatically cleaned up with vkinstance
         VkDevice device; // Logical Device, can have multiple \n Necessary to clean up
+
         VkQueue graphicsQueue;  // Stores the handle of graphics queue \n Automatically cleaned up
+        VkQueue presentQueue;   // Stores the handle of presentation queue \n Automatically cleaned up
 
         // This defines the parameters of glfw window
         void initWindow() {
@@ -82,10 +88,41 @@ class HelloTriangleApplication {
         void initVulkan() {
             createInstance(); // Creates an instance of vulkan
             setupDebugMessenger(); // Creates the debug messenger
+            createSurface(); // Creates the surface to allow vulkan to render on to
             pickPhysicalDevice(); // Picks a graphics card
             createLogicalDevice(); // Creates a logical device
         }
 
+        void mainLoop() {
+            // Loops until the window is closed
+            while (!glfwWindowShouldClose(window)) {
+
+                glfwPollEvents(); // Handles all the events in the event queue
+            }
+        }
+
+        // This function is executed after the mainloop ends
+        // It cleans up the instances created 
+        // The order of destruction is important
+        void cleanup() {
+            // Detroys the logical device
+            vkDestroyDevice(device, nullptr);
+
+            // Destroys the debug messenger 
+            if (enableValidationLayers) {
+                DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
+            }
+
+            // Destroys the surface where vulkan is rendered
+            vkDestroySurfaceKHR(instance, surface, nullptr);
+            // Destroys the vulkan instance
+            // Can take a callback pointer else nullptr
+            vkDestroyInstance(instance, nullptr);            
+
+            glfwDestroyWindow(window); // Destroys the glfw window instance
+
+            glfwTerminate(); // Terminates the glfw library
+        }
 
         // Function to create a vulkan instance
         void createInstance() {
@@ -140,33 +177,6 @@ class HelloTriangleApplication {
             }
         }
 
-        void mainLoop() {
-            // Loops until the window is closed
-            while (!glfwWindowShouldClose(window)) {
-
-                glfwPollEvents(); // Handles all the events in the event queue
-            }
-        }
-
-        // This function is executed after the mainloop ends
-        // It cleans up the instances created 
-        void cleanup() {
-            // Detroys the logical device
-            vkDestroyDevice(device, nullptr);
-
-            // Destroys the debug messenger 
-            if (enableValidationLayers) {
-                DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
-            }
-
-            // Destroys the vulkan instance
-            // Can take a callback pointer else nullptr
-            vkDestroyInstance(instance, nullptr);
-
-            glfwDestroyWindow(window); // Destroies the glfw window instance
-
-            glfwTerminate(); // Terminates the glfw library
-        }
         
         // Gets the required extensions
         // Also get debugging extension when validaion layers are active
@@ -218,6 +228,18 @@ class HelloTriangleApplication {
             return true;
         }
 
+        // Creates the debug messenger for when the vulkan instance is active
+        void setupDebugMessenger() {
+            if (!enableValidationLayers) return;
+
+            VkDebugUtilsMessengerCreateInfoEXT createInfo{};
+            populateDebugMessengerCreateInfo(createInfo);
+
+            if (CreateDebugUtilsMessengerEXT(instance, &createInfo, nullptr, &debugMessenger) != VK_SUCCESS) {
+                throw std::runtime_error("failed to set up debug messenger!");
+            }
+        }
+
         // Defines the specifications of debug messenger 
         void populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo) {
             createInfo = {};
@@ -231,17 +253,6 @@ class HelloTriangleApplication {
             createInfo.pfnUserCallback = debugCallback; 
         }
 
-        // Creates the debug messenger for when the vulkan instance is active
-        void setupDebugMessenger() {
-            if (!enableValidationLayers) return;
-
-            VkDebugUtilsMessengerCreateInfoEXT createInfo{};
-            populateDebugMessengerCreateInfo(createInfo);
-
-            if (CreateDebugUtilsMessengerEXT(instance, &createInfo, nullptr, &debugMessenger) != VK_SUCCESS) {
-                throw std::runtime_error("failed to set up debug messenger!");
-            }
-        }
 
         // Defines what to do with the debug messages
         static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
@@ -284,6 +295,16 @@ class HelloTriangleApplication {
             std::cerr << "validation layer: " << pCallbackData->pMessage << std::endl;
 
             return VK_FALSE;
+        }
+
+        // Creates a surface so vulkan can interact with the window
+        // Surface creation is platform dependent and different procedure is required for different os
+        // 
+        // Here glfw's surface creation is used which is platform agnostic
+        void createSurface(){
+            if (glfwCreateWindowSurface(instance, window, nullptr, &surface) != VK_SUCCESS) {
+                throw std::runtime_error("failed to create window surface!");
+            }
         }
 
         void pickPhysicalDevice(){
@@ -348,20 +369,23 @@ class HelloTriangleApplication {
             return score;
         }
 
+        // Stores the index of the queue family
+        // the optional uint32_t allows the functionality to check if
+        // the variable has a value assigned
         struct QueueFamilyIndices {
-            // Stores the index of the queue family
-            // the optional uint32_t allows the functionality to check if
-            // the variable has a value assigned
-            std::optional<uint32_t> graphicsFamily;
+
+            std::optional<uint32_t> graphicsFamily; // Index of the queue family that draws
+
+            std::optional<uint32_t> presentFamily;  // Index of the queue family that presents
 
 
             bool isComplete() {
-                return graphicsFamily.has_value();
+                return graphicsFamily.has_value() && presentFamily.has_value();
             }
         };
 
         // Takes a graphics device and returns a struct with 
-        // index of the queue family needed
+        // indexes of the queue family needed
         QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device) {
             QueueFamilyIndices indices;
             // Logic to find queue family indices to populate struct with
@@ -371,14 +395,22 @@ class HelloTriangleApplication {
             std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount); // Array to store Queue families
             vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamilies.data());
             
-            // Finding a queue family that supports VK_QUEUE_GRAPHICS_BIT
-            int i = 0;
+            // Finding a queue families with the required capabilities
+            int i = 0; // Index of the current queue family of the physical device
             for (const auto& queueFamily : queueFamilies) {
+                // Checks for a queue family for drawing
                 if (queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
                     indices.graphicsFamily = i;
                 }
 
-                // If the queue family with the requirements is already assigned
+                // Checks for a queue family for presenting to the surface
+                VkBool32 presentSupport = false;
+                vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface, &presentSupport);
+                // Assignes the index when a suitable queue family is found
+                if (presentSupport) {
+                    indices.presentFamily = i;
+                }
+                // If the queue families with the requirements is already assigned
                 if (indices.isComplete()) {
                     break;
                 }
@@ -387,18 +419,25 @@ class HelloTriangleApplication {
             }
             return indices;
         } 
-
+        
+        // Creates a logical device using the physical device
+        // It also utilises the queue family to be used
         void createLogicalDevice(){
             QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
-            // Structure of the queues to create
-            VkDeviceQueueCreateInfo queueCreateInfo{};
-            queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+            // A vector that stores structs of queue creation info
+            std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
+            std::set<uint32_t> uniqueQueueFamilies = {indices.graphicsFamily.value(), indices.presentFamily.value()};
 
-            queueCreateInfo.queueFamilyIndex = indices.graphicsFamily.value();
-            queueCreateInfo.queueCount = 1; // No. of queues this queue family can have
+            float queuePriority = 1.0f;
+            for (uint32_t queueFamily : uniqueQueueFamilies) {
+                VkDeviceQueueCreateInfo queueCreateInfo{}; // A struct to define queue creation
+                queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO; // Type of struct
+                queueCreateInfo.queueFamilyIndex = queueFamily; // Index of queue family to be created
+                queueCreateInfo.queueCount = 1; // No. of queues assigned to the family
+                queueCreateInfo.pQueuePriorities = &queuePriority; // Priority of the queue family
 
-            float queuePriority = 1.0f; // Priority of queue ranging from 0.0 to 1.0
-            queueCreateInfo.pQueuePriorities = &queuePriority;
+                queueCreateInfos.push_back(queueCreateInfo); // Adding the struct to the vector
+            }
 
             VkPhysicalDeviceFeatures deviceFeatures{}; // Features required, empty for now
 
@@ -406,8 +445,8 @@ class HelloTriangleApplication {
             VkDeviceCreateInfo createInfo{};
             createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
 
-            createInfo.pQueueCreateInfos = &queueCreateInfo; // Pointing to the queue structure
-            createInfo.queueCreateInfoCount = 1;
+            createInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size()); // No of queue families
+            createInfo.pQueueCreateInfos = queueCreateInfos.data(); // Creation structs of the queue families
 
             createInfo.pEnabledFeatures = &deviceFeatures;  // Pointing to the features used
 
@@ -427,8 +466,10 @@ class HelloTriangleApplication {
                 throw std::runtime_error("failed to create logical device!");
             }
 
-            // Storing the handle of the graphics queue to index 0
+            // Storing the handle of the graphics/drawing queue to index 0
             vkGetDeviceQueue(device, indices.graphicsFamily.value(), 0, &graphicsQueue);
+            // Storing the handle of the presentation queue to index 0
+            vkGetDeviceQueue(device, indices.presentFamily.value(), 0, &presentQueue);
         }
     };
 
