@@ -59,9 +59,11 @@ class HelloTriangleApplication {
     private:
 
         GLFWwindow* window; // GLFW window instance
-        VkInstance instance; // Vulkan instance
+        VkInstance instance; // Vulkan instance \n Necessary to clean up
         VkDebugUtilsMessengerEXT debugMessenger; // Debug callback
-        VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
+        VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;   // The physical graphics device (GPU)
+        VkDevice device; // Logical Device, can have multiple \n Necessary to clean up
+        VkQueue graphicsQueue;  // Stores the handle of graphics queue \n Automatically cleaned up
 
         // This defines the parameters of glfw window
         void initWindow() {
@@ -81,6 +83,7 @@ class HelloTriangleApplication {
             createInstance(); // Creates an instance of vulkan
             setupDebugMessenger(); // Creates the debug messenger
             pickPhysicalDevice(); // Picks a graphics card
+            createLogicalDevice(); // Creates a logical device
         }
 
 
@@ -148,10 +151,14 @@ class HelloTriangleApplication {
         // This function is executed after the mainloop ends
         // It cleans up the instances created 
         void cleanup() {
+            // Detroys the logical device
+            vkDestroyDevice(device, nullptr);
+
             // Destroys the debug messenger 
             if (enableValidationLayers) {
                 DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
             }
+
             // Destroys the vulkan instance
             // Can take a callback pointer else nullptr
             vkDestroyInstance(instance, nullptr);
@@ -380,6 +387,49 @@ class HelloTriangleApplication {
             }
             return indices;
         } 
+
+        void createLogicalDevice(){
+            QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
+            // Structure of the queues to create
+            VkDeviceQueueCreateInfo queueCreateInfo{};
+            queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+
+            queueCreateInfo.queueFamilyIndex = indices.graphicsFamily.value();
+            queueCreateInfo.queueCount = 1; // No. of queues this queue family can have
+
+            float queuePriority = 1.0f; // Priority of queue ranging from 0.0 to 1.0
+            queueCreateInfo.pQueuePriorities = &queuePriority;
+
+            VkPhysicalDeviceFeatures deviceFeatures{}; // Features required, empty for now
+
+            // Creating the structure of the logical device to be created
+            VkDeviceCreateInfo createInfo{};
+            createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+
+            createInfo.pQueueCreateInfos = &queueCreateInfo; // Pointing to the queue structure
+            createInfo.queueCreateInfoCount = 1;
+
+            createInfo.pEnabledFeatures = &deviceFeatures;  // Pointing to the features used
+
+            // Setting the extension count and status of validation layers
+            // It is ignored by up-to-date implementaions
+            // Here for backward compatability
+            createInfo.enabledExtensionCount = 0; 
+            if (enableValidationLayers) {
+                createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
+                createInfo.ppEnabledLayerNames = validationLayers.data();
+            } else {
+                createInfo.enabledLayerCount = 0;
+            }
+
+            // Creating the logical device with the struct above
+            if (vkCreateDevice(physicalDevice, &createInfo, nullptr, &device) != VK_SUCCESS) {
+                throw std::runtime_error("failed to create logical device!");
+            }
+
+            // Storing the handle of the graphics queue to index 0
+            vkGetDeviceQueue(device, indices.graphicsFamily.value(), 0, &graphicsQueue);
+        }
     };
 
 int main() {
