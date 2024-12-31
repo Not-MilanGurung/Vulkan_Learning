@@ -84,6 +84,8 @@ class HelloTriangleApplication {
         VkFormat swapChainImageFormat; // Image format of the swapchain
         VkExtent2D swapChainExtent; // Extent, size of the image of the swapchain in pixels
 
+        std::vector<VkImageView> swapChainImageViews; // Stores Image views. Needs to be cleaned up
+
         // This defines the parameters of glfw window
         void initWindow() {
             glfwInit(); // Initialise the glfw library
@@ -105,6 +107,7 @@ class HelloTriangleApplication {
             pickPhysicalDevice(); // Picks a graphics card
             createLogicalDevice(); // Creates a logical device
             createSwapChain(); // Creates the swap chain
+            createImageViews();
         }
 
         void mainLoop() {
@@ -119,6 +122,10 @@ class HelloTriangleApplication {
         // It cleans up the instances created 
         // The order of destruction is important
         void cleanup() {
+            // Destroys the image views created
+            for (auto imageView : swapChainImageViews) {
+                vkDestroyImageView(device, imageView, nullptr);
+            }
             // Destroys the swap chain
             vkDestroySwapchainKHR(device, swapChain, nullptr);
             // Detroys the logical device
@@ -656,8 +663,8 @@ class HelloTriangleApplication {
 
         
         /**  
-        * Selecting presentation mode
-        * 
+        *## Selecting presentation mode
+        *
         * This function selects the best presentation mode available for the swap chain
         * There are four possible presentation modes:
         * 
@@ -719,6 +726,42 @@ class HelloTriangleApplication {
                 actualExtent.height = std::clamp(actualExtent.height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height);
 
                 return actualExtent;
+            }
+        }
+
+        // Creates image views for the images in the swap chain
+        void createImageViews() {
+            // Resizing vector to fit all the images in the swap chain
+            swapChainImageViews.resize(swapChainImages.size()); 
+
+            // Looping over the images in swap chain and creating their image views
+            for (size_t i = 0; i < swapChainImages.size(); i++) {
+                VkImageViewCreateInfo createInfo{};
+                createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+                createInfo.image = swapChainImages[i];
+
+                // Specifying how the image is interperted
+                createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;    // Using image as 2D texture
+                createInfo.format = swapChainImageFormat;       // The format of swap chain image
+
+                // Components allows to swizzle color channels
+                // Using the default value right now
+                createInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;    // Red channel
+                createInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;    // Green channel
+                createInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;    // Blue channel
+                createInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;    // Alpha channel
+
+                // Used to define the purpose of the image
+                // Right now using image as color target without mipmapping
+                createInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                createInfo.subresourceRange.baseMipLevel = 0;
+                createInfo.subresourceRange.levelCount = 1;
+                createInfo.subresourceRange.baseArrayLayer = 0;
+                createInfo.subresourceRange.layerCount = 1;
+
+                if (vkCreateImageView(device, &createInfo, nullptr, &swapChainImageViews[i]) != VK_SUCCESS) {
+                    throw std::runtime_error("failed to create image views!");
+                }
             }
         }
     };
