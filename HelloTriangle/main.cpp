@@ -14,7 +14,7 @@
 #include <cstdint> // Necessary for uint32_t
 #include <limits> // Necessary for std::numeric_limits
 #include <algorithm> // Necessary for std::clamp
-
+#include <fstream>  // For reading the SPIR-V byte code
 
 const uint32_t WIDTH = 800; // Defining the width of the GLFW window
 const uint32_t HEIGHT = 600; // Defining the height of the GLFW window
@@ -108,6 +108,7 @@ class HelloTriangleApplication {
             createLogicalDevice(); // Creates a logical device
             createSwapChain(); // Creates the swap chain
             createImageViews();
+            createGraphicsPipeline();
         }
 
         void mainLoop() {
@@ -764,6 +765,87 @@ class HelloTriangleApplication {
                 }
             }
         }
+
+        void createGraphicsPipeline() {
+            // Reading the byte code and storing them
+            auto vertShaderCode = readFile("shaders/vert.spv"); // For storing vertex shader byte code
+            auto fragShaderCode = readFile("shaders/frag.spv"); // For storing fragment shader byte code
+
+            // Wrapping the bytecode
+            // The compilation and linking of the SPIR-V bytecode to machine code for execution by the GPU 
+            // doesn't happen until the graphics pipeline is created. That means that we're allowed to destroy 
+            // the shader modules again as soon as pipeline creation is finished, which is why we'll make them 
+            // local variables in the createGraphicsPipeline function instead of class members
+            VkShaderModule vertShaderModule = createShaderModule(vertShaderCode);   
+            VkShaderModule fragShaderModule = createShaderModule(fragShaderCode);
+
+            // Assigning the shaders to the graphics pipeline stage
+
+            // For vertex shader 
+            VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
+            vertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            vertShaderStageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT; // Macro for vertex shader stage
+            vertShaderStageInfo.module = vertShaderModule;  // Module containing the vertex shader bytecode
+            vertShaderStageInfo.pName = "main"; // The function to invoke while running the bytecode
+            // pSpecializationInfo is an optional parameter used to specify the shader constants
+            // It can be used for modifying shader behaviour at pipeline creation
+
+            // For fragment shader
+            VkPipelineShaderStageCreateInfo fragShaderStageInfo{};
+            fragShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            fragShaderStageInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT; // Macro for fragment shader stage
+            fragShaderStageInfo.module = fragShaderModule; // Module containing the fragment shader bytecode
+            fragShaderStageInfo.pName = "main"; // The function to invoke while running the bytecode
+
+            // Array to store the create info structs for future reference in the creation pipeline
+            VkPipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo, fragShaderStageInfo};
+
+            // Cleaning up the shader modules after creation of pipeline
+            vkDestroyShaderModule(device, fragShaderModule, nullptr);
+            vkDestroyShaderModule(device, vertShaderModule, nullptr);
+        }
+
+        // Helper function for reading the shader byte code
+        static std::vector<char> readFile(const std::string& filename) {
+            // ate: Start reading at the end of the file
+            // binary: Read the file as binary file (avoid text transformations)
+            std::ifstream file(filename, std::ios::ate | std::ios::binary);
+
+            if (!file.is_open()) {
+                throw std::runtime_error("failed to open file!");
+            }
+            // Using read position to find the file size as we are reading from the end
+            size_t fileSize = (size_t) file.tellg(); 
+            std::vector<char> buffer(fileSize);
+
+            file.seekg(0); // Seeking the beginning of the file
+            file.read(buffer.data(), fileSize); // Reading the bytes to buffer
+
+            file.close();   // Close the file
+
+            return buffer;  // Return the contents of the file
+        }
+
+        /// For wrapping the shader code in a VkShaderModule object
+        /// @param code pointer to the buffer with the bytecode and the length of it
+        VkShaderModule createShaderModule(const std::vector<char>& code) {
+
+            VkShaderModuleCreateInfo createInfo{};
+            createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO; // Type of create info
+            createInfo.codeSize = code.size(); // Bytecode size in bytes
+
+            // The create info accepts bytecode pointer in uint32_5 instead of char pointer we are providing
+            // Hence recasting the pointer into uint32_t
+            createInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
+
+            VkShaderModule shaderModule;    // For storing the shader module created
+            if (vkCreateShaderModule(device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS) {
+                throw std::runtime_error("failed to create shader module!");
+            }
+
+            return shaderModule;
+        }
+
     };
 
 int main() {
