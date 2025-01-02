@@ -86,7 +86,10 @@ class HelloTriangleApplication {
 
         std::vector<VkImageView> swapChainImageViews; // Stores Image views. Needs to be cleaned up
 
+        VkRenderPass renderPass;
         VkPipelineLayout pipelineLayout;
+
+        VkPipeline graphicsPipeline;
 
         // This defines the parameters of glfw window
         void initWindow() {
@@ -110,6 +113,7 @@ class HelloTriangleApplication {
             createLogicalDevice(); // Creates a logical device
             createSwapChain(); // Creates the swap chain
             createImageViews();
+            createRenderPass();
             createGraphicsPipeline();
         }
 
@@ -125,8 +129,12 @@ class HelloTriangleApplication {
         // It cleans up the instances created 
         // The order of destruction is important
         void cleanup() {
-            //Destroys the pipeline layout
+            // Destroys the graphics pipeline
+            vkDestroyPipeline(device, graphicsPipeline, nullptr);
+            // Destroys the pipeline layout
             vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
+            // Destroys the render pass
+            vkDestroyRenderPass(device, renderPass, nullptr);
             // Destroys the image views created
             for (auto imageView : swapChainImageViews) {
                 vkDestroyImageView(device, imageView, nullptr);
@@ -733,6 +741,60 @@ class HelloTriangleApplication {
                 return actualExtent;
             }
         }
+        // to specify how many color and depth buffers there will be, how many samples to use for 
+        // each of them and how their contents should be handled throughout the rendering operations
+        void createRenderPass() {
+            VkAttachmentDescription colorAttachment{};
+            colorAttachment.format = swapChainImageFormat;
+            colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+
+            // The loadOp and storeOp determine what to do with the data in the attachment before 
+            // rendering and after rendering.
+            // 
+            // We have the following choices for loadOp:
+            // 
+            // VK_ATTACHMENT_LOAD_OP_LOAD:      Preserve the existing contents of the attachment
+            // VK_ATTACHMENT_LOAD_OP_CLEAR:     Clear the values to a constant at the start
+            // VK_ATTACHMENT_LOAD_OP_DONT_CARE: Existing contents are undefined; we don't care about them
+            colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            // There are only two possibilities for the storeOp:
+            // 
+            // VK_ATTACHMENT_STORE_OP_STORE: Rendered contents will be stored in memory and can be read later
+            // VK_ATTACHMENT_STORE_OP_DONT_CARE: Contents of the framebuffer will be undefined after the rendering operation
+            colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+            // The loadOp and storeOp apply to color and depth data, and stencilLoadOp / stencilStoreOp apply to stencil data.
+            colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+
+            // Some of the most common layouts are:
+            // 
+            // VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:    Images used as color attachment
+            // VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:             Images to be presented in the swap chain
+            // VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:        Images to be used as destination for a memory copy operation
+            colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;      // Don't care what the image layout is before render pass
+            colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;  // The render pass after render pass
+
+            VkAttachmentReference colorAttachmentRef{};
+            colorAttachmentRef.attachment = 0; // Referencing the attachment at index 0; the only one 
+            colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL; // Best layout for using attachment as color buffer
+
+            VkSubpassDescription subpass{};
+            subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS; // Explicitly using a graphics subpass
+            subpass.colorAttachmentCount = 1;
+            subpass.pColorAttachments = &colorAttachmentRef;
+
+            VkRenderPassCreateInfo renderPassInfo{};
+            renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+            renderPassInfo.attachmentCount = 1; // No. of attachments
+            renderPassInfo.pAttachments = &colorAttachment; // Pointer to array of attachments
+            renderPassInfo.subpassCount = 1;    // No. of subpasses
+            renderPassInfo.pSubpasses = &subpass;   // Pointer to array of subpasses
+
+            if (vkCreateRenderPass(device, &renderPassInfo, nullptr, &renderPass) != VK_SUCCESS) {
+                throw std::runtime_error("failed to create render pass!");
+            }
+        }
 
         // Creates image views for the images in the swap chain
         void createImageViews() {
@@ -953,6 +1015,36 @@ class HelloTriangleApplication {
 
             if (vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
                 throw std::runtime_error("failed to create pipeline layout!");
+            }
+
+            VkGraphicsPipelineCreateInfo pipelineInfo{};
+            pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+            // Referencing the structs of shader stages
+            pipelineInfo.stageCount = 2;
+            pipelineInfo.pStages = shaderStages;
+            // Referencing the structs of fixed-functions created above
+            pipelineInfo.pVertexInputState = &vertexInputInfo;
+            pipelineInfo.pInputAssemblyState = &inputAssembly;
+            pipelineInfo.pViewportState = &viewportState;
+            pipelineInfo.pRasterizationState = &rasterizer;
+            pipelineInfo.pMultisampleState = &multisampling;
+            pipelineInfo.pDepthStencilState = nullptr; // Optional
+            pipelineInfo.pColorBlendState = &colorBlending;
+            pipelineInfo.pDynamicState = &dynamicState;
+            // Referencing the pipeline layout
+            pipelineInfo.layout = pipelineLayout;
+            // Referencing the renderpass
+            pipelineInfo.renderPass = renderPass;
+            pipelineInfo.subpass = 0; // Index of subpass where where this graphics pipeline is used
+
+            // Used where deriving pipelines
+            // VK_PIPELINE_CREATE_DERIVATIVE_BIT flag is also specified in the flags field of VkGraphicsPipelineCreateInfo
+            // Right now only one pipeline is used so they are not needed
+            pipelineInfo.basePipelineHandle = VK_NULL_HANDLE; // Optional
+            pipelineInfo.basePipelineIndex = -1; // Optional
+
+            if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline) != VK_SUCCESS) {
+                throw std::runtime_error("failed to create graphics pipeline!");
             }
 
             // Cleaning up the shader modules after creation of pipeline
