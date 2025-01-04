@@ -19,6 +19,7 @@
 const uint32_t WIDTH = 800; // Defining the width of the GLFW window
 const uint32_t HEIGHT = 600; // Defining the height of the GLFW window
 const char TITLE[7] = "Vulkan"; // Defining the title of the GLFW window
+const int MAX_FRAMES_IN_FLIGHT = 2; // How many frames to process concurrently
 
 // Name of the validation layer
 const std::vector<const char*> validationLayers = {
@@ -67,14 +68,14 @@ class HelloTriangleApplication {
 
     private:
 
-        GLFWwindow* window; // GLFW window instance \n Necessary to clean up
+        GLFWwindow* window; // GLFW window instance /n Necessary to clean up
 
-        VkInstance instance; // Vulkan instance \n Necessary to clean up
+        VkInstance instance; // Vulkan instance /n Necessary to clean up
         VkDebugUtilsMessengerEXT debugMessenger; // Debug callback \n Necessary to clean up
         VkSurfaceKHR surface; // Window system integration surface \n Necessary to clean up
 
         VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;   // The physical graphics device (GPU) \n Automatically cleaned up with vkinstance
-        VkDevice device; // Logical Device, can have multiple \n Necessary to clean up
+        VkDevice device; // Logical Device, can have multiple /n Necessary to clean up
 
         VkQueue graphicsQueue;  // Stores the handle of graphics queue \n Automatically cleaned up
         VkQueue presentQueue;   // Stores the handle of presentation queue \n Automatically cleaned up
@@ -94,23 +95,38 @@ class HelloTriangleApplication {
         std::vector<VkFramebuffer> swapChainFramebuffers; // Frame buffer
 
         VkCommandPool commandPool; // Manages the memory allocated to command buffers
-        VkCommandBuffer commandBuffer;
+        std::vector<VkCommandBuffer> commandBuffers;
 
-        VkSemaphore imageAvailableSemaphore; // Semaphore to signal that image has been acquired from swapchain
-        VkSemaphore renderFinishedSemaphore; // Semaphore to signal the rendering is done and ready to be presented
-        VkFence inFlightFence;  // Making sure new frame is drawn only after the previous frame is finished
+        std::vector<VkSemaphore> imageAvailableSemaphores; // Semaphores to signal that image has been acquired from swapchain
+        std::vector<VkSemaphore> renderFinishedSemaphores; // Semaphores to signal the rendering is done and ready to be presented
+        std::vector<VkFence> inFlightFences;  // Making sure new frame is drawn only after the previous frame is finished
+
+        bool framebufferResized = false;
+
+        uint32_t currentFrame = 0;
 
         // This defines the parameters of glfw window
         void initWindow() {
             glfwInit(); // Initialise the glfw library
 
             glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API); // Telling glfw to not use OpenGL
-            glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE); // Preventing it from resizing
+            
             
             // Create the window with the parameter width, height, title,
             // pointer to monitor for full screen or null for windowed mode,
             // pointer to share with another window or null if not sharing
             window = glfwCreateWindow(WIDTH, HEIGHT, TITLE, nullptr, nullptr);
+            // Storing the pointer to this instance of HelloTriangleApplication in the window to call later
+            glfwSetWindowUserPointer(window, this); 
+            // Callback function is called when the window is resized
+            glfwSetFramebufferSizeCallback(window, framebufferResizeCallback); 
+        }
+
+        // When the window is resized
+        static void framebufferResizeCallback(GLFWwindow* window, int width, int height) {
+            // Recasting using the pointer of the HelloTriangleApplication instance stored in the window in initWindow() function
+            auto app = reinterpret_cast<HelloTriangleApplication*>(glfwGetWindowUserPointer(window));
+            app->framebufferResized = true;
         }
 
         // All the code needed to initialise vulkan 
@@ -146,29 +162,27 @@ class HelloTriangleApplication {
         // It cleans up the instances created 
         // The order of destruction is important
         void cleanup() {
-            // Destroys the syncronisation objects
-            vkDestroySemaphore(device, imageAvailableSemaphore, nullptr);
-            vkDestroySemaphore(device, renderFinishedSemaphore, nullptr);
-            vkDestroyFence(device, inFlightFence, nullptr);
 
-            // Destroys command pool
-            vkDestroyCommandPool(device, commandPool, nullptr);
-            // Destroys the frame buffers
-            for (auto framebuffer : swapChainFramebuffers) {
-                vkDestroyFramebuffer(device, framebuffer, nullptr);
-            }
+            cleanupSwapChain();
+
             // Destroys the graphics pipeline
             vkDestroyPipeline(device, graphicsPipeline, nullptr);
             // Destroys the pipeline layout
             vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
+
             // Destroys the render pass
             vkDestroyRenderPass(device, renderPass, nullptr);
-            // Destroys the image views created
-            for (auto imageView : swapChainImageViews) {
-                vkDestroyImageView(device, imageView, nullptr);
+
+            // Destroys the syncronisation objects
+            for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+                vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
+                vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
+                vkDestroyFence(device, inFlightFences[i], nullptr);
             }
-            // Destroys the swap chain
-            vkDestroySwapchainKHR(device, swapChain, nullptr);
+
+            // Destroys command pool
+            vkDestroyCommandPool(device, commandPool, nullptr);
+            
             // Detroys the logical device
             vkDestroyDevice(device, nullptr);
 
@@ -197,23 +211,32 @@ class HelloTriangleApplication {
         // - Present the swap chain image
         void drawFrame() {
             // Wait until previous frame is finished
-            vkWaitForFences(device, 1, &inFlightFence, VK_TRUE, UINT64_MAX);
-            // Reset the fence indicating the start of the frame
-            vkResetFences(device, 1, &inFlightFence);
+            vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
             
             // Acquiring the image from the swapchain
             uint32_t imageIndex; // The index of the image available for rendering
             // Defining the logical device, swapchain, timeout in nanoseconds, syncronization object, and where to store the image index
-            vkAcquireNextImageKHR(device, swapChain, UINT64_MAX, imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
+            VkResult result = vkAcquireNextImageKHR(device, swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
+            // If swap chain is out of date
+            if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+                recreateSwapChain();
+                return;
+            } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+                throw std::runtime_error("failed to acquire swap chain image!");
+            }
 
-            vkResetCommandBuffer(commandBuffer, /*VkCommandBufferResetFlagBits*/ 0);
-            recordCommandBuffer(commandBuffer, imageIndex);
+            // Reset the fence indicating the start of the frame
+            // Only reset fence if we are subbmiting the work
+            vkResetFences(device, 1, &inFlightFences[currentFrame]);
+
+            vkResetCommandBuffer(commandBuffers[currentFrame], /*VkCommandBufferResetFlagBits*/ 0);
+            recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
 
             VkSubmitInfo submitInfo{};
             submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
             // Semaphores to wait on before executing the command
-            VkSemaphore waitSemaphores[] = {imageAvailableSemaphore};
+            VkSemaphore waitSemaphores[] = {imageAvailableSemaphores[currentFrame]};
             // Stage to wait on
             VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
 
@@ -223,15 +246,15 @@ class HelloTriangleApplication {
 
             // Command buffers to submint the execution to
             submitInfo.commandBufferCount = 1;
-            submitInfo.pCommandBuffers = &commandBuffer;
+            submitInfo.pCommandBuffers = &commandBuffers[currentFrame];
 
             // Semaphores to signal to once the command buffer(s) has finished execution
-            VkSemaphore signalSemaphores[] = {renderFinishedSemaphore};
+            VkSemaphore signalSemaphores[] = {renderFinishedSemaphores[currentFrame]};
             submitInfo.signalSemaphoreCount = 1;
             submitInfo.pSignalSemaphores = signalSemaphores;
 
             if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, 
-                                inFlightFence /* Signal CPU to wait until the command buffers have finished execution */) != VK_SUCCESS) {
+                                inFlightFences[currentFrame] /* Signal CPU to wait until the command buffers have finished execution */) != VK_SUCCESS) {
                 throw std::runtime_error("failed to submit draw command buffer!");
             }
 
@@ -248,7 +271,16 @@ class HelloTriangleApplication {
 
             presentInfo.pResults = nullptr; // Optional. Return array of vkResults if all images are presented to the swap chains
 
-            vkQueuePresentKHR(presentQueue, &presentInfo);
+            result = vkQueuePresentKHR(presentQueue, &presentInfo);
+            // If swap chain is out of date or suboptimal, create a new swapchain and try drawing in the next cycle
+            if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
+                framebufferResized = false;
+                recreateSwapChain();
+            } else if (result != VK_SUCCESS) {
+                throw std::runtime_error("failed to present swap chain image!");
+            }
+
+            currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT; // Advance to next frame in flight and not exceed the max frames in flight
         }
 
         // Function to create a vulkan instance
@@ -1246,6 +1278,7 @@ class HelloTriangleApplication {
         }
 
         void createCommandBuffer() {
+            commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
             VkCommandBufferAllocateInfo allocInfo{};
             allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
             allocInfo.commandPool = commandPool;    // Reference to the command pool managing the command buffer
@@ -1256,9 +1289,9 @@ class HelloTriangleApplication {
             // VK_COMMAND_BUFFER_LEVEL_SECONDARY:   Cannot be submitted directly, but can be called from primary command buffers.
             allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
 
-            allocInfo.commandBufferCount = 1;   // No. of command buffers
+            allocInfo.commandBufferCount = (uint32_t) commandBuffers.size();   // No. of command buffers
 
-            if (vkAllocateCommandBuffers(device, &allocInfo, &commandBuffer) != VK_SUCCESS) {
+            if (vkAllocateCommandBuffers(device, &allocInfo, commandBuffers.data()) != VK_SUCCESS) {
                 throw std::runtime_error("failed to allocate command buffers!");
             }
         }
@@ -1357,6 +1390,11 @@ class HelloTriangleApplication {
 
         // Creates objects used for syncronisation
         void createSyncObjects() {
+            // Resizeing the vectors to accoring to max frames in flight
+            imageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+            renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+            inFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
+
             VkSemaphoreCreateInfo semaphoreInfo{};
             semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
 
@@ -1365,13 +1403,49 @@ class HelloTriangleApplication {
             // Flagging the fence to start as signaled to allow the first frame to render
             fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT; 
 
-            if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &imageAvailableSemaphore) != VK_SUCCESS ||
-                vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderFinishedSemaphore) != VK_SUCCESS){
-                throw std::runtime_error("failed to create semaphores!");
+            // Creating syncronisation objects for each frame in flight
+            for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+                if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &imageAvailableSemaphores[i]) != VK_SUCCESS ||
+                    vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderFinishedSemaphores[i]) != VK_SUCCESS){
+                    throw std::runtime_error("failed to create semaphores!");
+                }
+                if (vkCreateFence(device, &fenceInfo, nullptr, &inFlightFences[i]) != VK_SUCCESS) {
+                    throw std::runtime_error("failed to create fence!");
+                }
             }
-            if (vkCreateFence(device, &fenceInfo, nullptr, &inFlightFence) != VK_SUCCESS) {
-                throw std::runtime_error("failed to create fence!");
+        }
+
+        // Clean up the incompatable swapchain
+        // Also cleans up frame buffers and imageviews as they are reliant on the swap chain
+        void cleanupSwapChain() {
+            for (size_t i = 0; i < swapChainFramebuffers.size(); i++) {
+                vkDestroyFramebuffer(device, swapChainFramebuffers[i], nullptr);
             }
+
+            for (size_t i = 0; i < swapChainImageViews.size(); i++) {
+                vkDestroyImageView(device, swapChainImageViews[i], nullptr);
+            }
+
+            vkDestroySwapchainKHR(device, swapChain, nullptr);
+        }
+        // Recreating swapchain when it is no longer compatiable with the surface
+        // For example when resizing the window
+        void recreateSwapChain() {
+            // Ideling the recreation when the window is minimized
+            int width = 0, height = 0;
+            glfwGetFramebufferSize(window, &width, &height); // Gets the size of the window
+            while (width == 0 || height == 0) {
+                glfwGetFramebufferSize(window, &width, &height); // Gets the size of the window
+                glfwWaitEvents();
+            }
+
+            vkDeviceWaitIdle(device);
+
+            cleanupSwapChain();
+
+            createSwapChain();
+            createImageViews();
+            createFramebuffers();
         }
     };
 
