@@ -15,6 +15,7 @@
 #include <limits> // Necessary for std::numeric_limits
 #include <algorithm> // Necessary for std::clamp
 #include <fstream>  // For reading the SPIR-V byte code
+#include <glm/glm.hpp> // Linear algebra
 
 const uint32_t WIDTH = 800; // Defining the width of the GLFW window
 const uint32_t HEIGHT = 600; // Defining the height of the GLFW window
@@ -56,6 +57,83 @@ void DestroyDebugUtilsMessengerEXT(VkInstance instance, VkDebugUtilsMessengerEXT
     }
 }
 
+// Stores the index of the queue family
+// the optional uint32_t allows the functionality to check if
+// the variable has a value assigned
+struct QueueFamilyIndices {
+
+    std::optional<uint32_t> graphicsFamily; // Index of the queue family that draws
+
+    std::optional<uint32_t> presentFamily;  // Index of the queue family that presents
+
+
+    bool isComplete() {
+        return graphicsFamily.has_value() && presentFamily.has_value();
+    }
+};
+
+// Struct to check if the device swap chain is suitable with the window surface
+struct SwapChainSupportDetails {
+    VkSurfaceCapabilitiesKHR capabilities;  // Store the capabilities of the device surface
+    std::vector<VkSurfaceFormatKHR> formats; // Store the surface formats supported by the device
+    std::vector<VkPresentModeKHR> presentModes;
+};
+
+struct Vertex {
+    glm::vec2 pos;
+    glm::vec3 color;
+
+    // Describes at which rate to read vertex data
+    static VkVertexInputBindingDescription getBindingDescription() {
+        VkVertexInputBindingDescription bindingDescription{};
+        bindingDescription.binding = 0; // Index of binding in the array
+        bindingDescription.stride = sizeof(Vertex); // No. of bytes from one entry to next
+        // the inputRate parameter can have one of the following values:
+        // 
+        // VK_VERTEX_INPUT_RATE_VERTEX: Move to the next data entry after each vertex
+        // VK_VERTEX_INPUT_RATE_INSTANCE: Move to the next data entry after each instance
+        bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+        return bindingDescription;
+    }
+
+    // Describes how to extract a attribute from a binding
+    static std::array<VkVertexInputAttributeDescription, 2> getAttributeDescriptions() {
+        // Position attribute
+        std::array<VkVertexInputAttributeDescription, 2> attributeDescriptions{};
+        attributeDescriptions[0].binding = 0;   // Index of the binding
+        attributeDescriptions[0].location = 0; // Location directive of the input in vertex shader
+
+        // float: VK_FORMAT_R32_SFLOAT
+        // vec2: VK_FORMAT_R32G32_SFLOAT
+        // vec3: VK_FORMAT_R32G32B32_SFLOAT
+        // vec4: VK_FORMAT_R32G32B32A32_SFLOAT
+        attributeDescriptions[0].format = VK_FORMAT_R32G32_SFLOAT; // Type of data 
+        // offset parameter specifies the number of bytes since the start of the per-vertex data to read from
+        attributeDescriptions[0].offset = offsetof(Vertex, pos); 
+
+        // Color attribute
+        attributeDescriptions[1].binding = 0;
+        attributeDescriptions[1].location = 1;
+        attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+        attributeDescriptions[1].offset = offsetof(Vertex, color);
+
+        return attributeDescriptions;
+    }
+};
+
+// interleaving vertex attributes
+// Position and color
+const std::vector<Vertex> vertices = {
+    // Bottom triangle
+    {{0.5f, -0.5f}, {1.0f, 0.0f, 1.0f}},
+    {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
+    {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
+    // Top triangles
+    {{-0.5f, -0.5f}, {0.5f, 0.0f, 1.0f}},
+    {{0.5f, -0.5f}, {0.0f, 1.0f, 0.5f}},
+    {{-0.5f, 0.5f}, {1.0f, 0.5f, 1.0f}}
+};
+
 class HelloTriangleApplication {
     public:
         // This fuction is used to start the application
@@ -96,6 +174,9 @@ class HelloTriangleApplication {
 
         VkCommandPool commandPool; // Manages the memory allocated to command buffers
         std::vector<VkCommandBuffer> commandBuffers;
+
+        VkBuffer vertexBuffer;
+        VkDeviceMemory vertexBufferMemory;
 
         std::vector<VkSemaphore> imageAvailableSemaphores; // Semaphores to signal that image has been acquired from swapchain
         std::vector<VkSemaphore> renderFinishedSemaphores; // Semaphores to signal the rendering is done and ready to be presented
@@ -142,6 +223,7 @@ class HelloTriangleApplication {
             createGraphicsPipeline();
             createFramebuffers();
             createCommandPool();
+            createVertexBuffer();
             createCommandBuffer(); // Creates a single command buffer
             createSyncObjects();
         }
@@ -164,6 +246,9 @@ class HelloTriangleApplication {
         void cleanup() {
 
             cleanupSwapChain();
+
+            vkDestroyBuffer(device, vertexBuffer, nullptr);
+            vkFreeMemory(device, vertexBufferMemory, nullptr);
 
             // Destroys the graphics pipeline
             vkDestroyPipeline(device, graphicsPipeline, nullptr);
@@ -544,21 +629,6 @@ class HelloTriangleApplication {
             return score;
         }
 
-        // Stores the index of the queue family
-        // the optional uint32_t allows the functionality to check if
-        // the variable has a value assigned
-        struct QueueFamilyIndices {
-
-            std::optional<uint32_t> graphicsFamily; // Index of the queue family that draws
-
-            std::optional<uint32_t> presentFamily;  // Index of the queue family that presents
-
-
-            bool isComplete() {
-                return graphicsFamily.has_value() && presentFamily.has_value();
-            }
-        };
-
         // Takes a graphics device and returns a struct with 
         // indexes of the queue family needed
         QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device) {
@@ -674,12 +744,6 @@ class HelloTriangleApplication {
             vkGetDeviceQueue(device, indices.presentFamily.value(), 0, &presentQueue);
         }
 
-        // Struct to check if the device swap chain is suitable with the window surface
-        struct SwapChainSupportDetails {
-            VkSurfaceCapabilitiesKHR capabilities;  // Store the capabilities of the device surface
-            std::vector<VkSurfaceFormatKHR> formats; // Store the surface formats supported by the device
-            std::vector<VkPresentModeKHR> presentModes;
-        };
 
         void createSwapChain() {
             SwapChainSupportDetails swapChainSupport = querySwapChainSupport(physicalDevice);
@@ -1007,15 +1071,14 @@ class HelloTriangleApplication {
             // Since we are using hard coded data, we insert null pointers
             VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
             vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+            auto bindingDescription = Vertex::getBindingDescription();
+            auto attributeDescriptions = Vertex::getAttributeDescriptions();
 
-            // Bindings: spacing between data and whether the data is per-vertex or per-instance 
-            vertexInputInfo.vertexBindingDescriptionCount = 0;
-            vertexInputInfo.pVertexBindingDescriptions = nullptr; // Optional. nullptr since the data is hard coded
+            vertexInputInfo.vertexBindingDescriptionCount = 1; // One binding. Should do the same as attribute description when more
+            vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
+            vertexInputInfo.pVertexBindingDescriptions = &bindingDescription; // Array to bindingDescriptions
+            vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data(); // Pointer to start of array of attribute description
             
-            // Attribute descriptions: type of the attributes passed to the vertex shader, which binding to 
-            // load them from and at which offset
-            vertexInputInfo.vertexAttributeDescriptionCount = 0;
-            vertexInputInfo.pVertexAttributeDescriptions = nullptr; // Optional. nullptr since the data is hard coded
 
 
             // struct describes two things: 
@@ -1277,6 +1340,67 @@ class HelloTriangleApplication {
             }
         }
 
+        // Allocates memory for buffer used for vertex data
+        void createVertexBuffer() {
+            VkBufferCreateInfo bufferInfo{};
+            bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+            bufferInfo.size = sizeof(vertices[0]) * vertices.size();
+
+            bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT; // Multiple usage can be defined using bitwise OR
+            bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE; // If it can be shared between queue families
+            // The flags parameter is used to configure sparse buffer memory, which is not relevant right now. 
+            // We'll leave it at the default value of 0
+
+            if (vkCreateBuffer(device, &bufferInfo, nullptr, &vertexBuffer) != VK_SUCCESS) {
+                throw std::runtime_error("failed to create vertex buffer!");
+            }
+            // Memory requirements of the buffer 
+            VkMemoryRequirements memRequirements;
+            vkGetBufferMemoryRequirements(device, vertexBuffer, &memRequirements);
+
+            VkMemoryAllocateInfo allocInfo{};
+            allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            allocInfo.allocationSize = memRequirements.size;
+            allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, 
+                                                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | // Ability to write from CPU
+                                                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT); // Ability to map the memory
+            
+            if (vkAllocateMemory(device, &allocInfo, nullptr, &vertexBufferMemory) != VK_SUCCESS) {
+                throw std::runtime_error("failed to allocate vertex buffer memory!");
+            }
+            // Binding the memory to the buffer
+            vkBindBufferMemory(device, vertexBuffer, vertexBufferMemory, 0);
+
+            // Mapping the buffer memory into CPU accessible memory with vkMapMemory
+            void* data;
+            vkMapMemory(device, vertexBufferMemory, 0, bufferInfo.size, 0, &data);
+            // Copy the vertex data to the mapped memory
+            memcpy(data, vertices.data(), (size_t) bufferInfo.size);
+            // Unmap the memory
+            vkUnmapMemory(device, vertexBufferMemory);
+        }
+
+        // combine the requirements of the buffer and our own application requirements 
+        // to find the right type of memory to use
+        uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
+            // Types of memory availabe on the physical device
+            VkPhysicalDeviceMemoryProperties memProperties;
+            vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
+            // Iterating over the availabe memory types
+            for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+                
+                if ((typeFilter & (1 << i)) // Checking if the bit corresponding to the filter is set to 1
+                && 
+                // Checking if the bits representing the required properties are set to 1(availabe) for this memory
+                (memProperties.memoryTypes[i].propertyFlags & properties) == properties) 
+                {
+                    return i;
+                }
+            }
+
+            throw std::runtime_error("failed to find suitable memory type!");
+        }
+
         void createCommandBuffer() {
             commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
             VkCommandBufferAllocateInfo allocInfo{};
@@ -1350,35 +1474,39 @@ class HelloTriangleApplication {
             //              The render pass commands will be executed from secondary command buffers.
             vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-            // Record command to bind graphics pipeline
-            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+                // Record command to bind graphics pipeline
+                vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
 
-            // Specifying the viewport as we are using dynamic viewport
-            VkViewport viewport{};
-            viewport.x = 0.0f;
-            viewport.y = 0.0f;
-            viewport.width = static_cast<float>(swapChainExtent.width);
-            viewport.height = static_cast<float>(swapChainExtent.height);
-            viewport.minDepth = 0.0f;
-            viewport.maxDepth = 1.0f;
-            vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
-            // Specifyng the scissor as we are using dynamic scissor
-            VkRect2D scissor{};
-            scissor.offset = {0, 0};
-            scissor.extent = swapChainExtent;
-            vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+                // Specifying the viewport as we are using dynamic viewport
+                VkViewport viewport{};
+                viewport.x = 0.0f;
+                viewport.y = 0.0f;
+                viewport.width = static_cast<float>(swapChainExtent.width);
+                viewport.height = static_cast<float>(swapChainExtent.height);
+                viewport.minDepth = 0.0f;
+                viewport.maxDepth = 1.0f;
+                vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+                // Specifyng the scissor as we are using dynamic scissor
+                VkRect2D scissor{};
+                scissor.offset = {0, 0};
+                scissor.extent = swapChainExtent;
+                vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
-            /**
-             * Recording the command to draw
-             * =============================
-             * It has the following parameters, aside from the command buffer:
-             * 
-             * vertexCount:     Even though we don't have a vertex buffer, we technically still have 3 vertices to draw.
-             * instanceCount:   Used for instanced rendering, use 1 if you're not doing that.
-             * firstVertex:     Used as an offset into the vertex buffer, defines the lowest value of gl_VertexIndex.
-             * firstInstance:   Used as an offset for instanced rendering, defines the lowest value of gl_InstanceIndex
-            */ 
-            vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+                /**
+                 * Recording the command to draw
+                 * =============================
+                 * It has the following parameters, aside from the command buffer:
+                 * 
+                 * vertexCount:     Size of the vertices array
+                 * instanceCount:   Used for instanced rendering, use 1 if you're not doing that.
+                 * firstVertex:     Used as an offset into the vertex buffer, defines the lowest value of gl_VertexIndex.
+                 * firstInstance:   Used as an offset for instanced rendering, defines the lowest value of gl_InstanceIndex
+                */ 
+                VkBuffer vertexBuffers[] = {vertexBuffer};
+                VkDeviceSize offsets[] = {0};
+                vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+
+                vkCmdDraw(commandBuffer, static_cast<uint32_t>(vertices.size()), 1, 0, 0);
 
             vkCmdEndRenderPass(commandBuffer);  // End the render pass
 
