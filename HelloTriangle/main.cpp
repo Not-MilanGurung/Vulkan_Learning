@@ -62,10 +62,13 @@ void DestroyDebugUtilsMessengerEXT(VkInstance instance, VkDebugUtilsMessengerEXT
 // the variable has a value assigned
 struct QueueFamilyIndices {
 
-    std::optional<uint32_t> graphicsFamily; // Index of the queue family that draws
+    std::optional<uint32_t> graphicsFamily; // Queue used for drawing 
 
-    std::optional<uint32_t> presentFamily;  // Index of the queue family that presents
+    std::optional<uint32_t> presentFamily;  // Queue used for presenting the rendered frames
 
+    // Not availabe for this device
+    // std::optional<uint32_t> transferFamily; 
+    // Queue used to transfer data from buffer accessible by CPU to buffer for the GPU
 
     bool isComplete() {
         return graphicsFamily.has_value() && presentFamily.has_value();
@@ -647,6 +650,10 @@ class HelloTriangleApplication {
                 if (queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
                     indices.graphicsFamily = i;
                 }
+                // If the device offers a seprate transfer queue
+                // else if (queueFamily.queueFlags & VK_QUEUE_TRANSFER_BIT) {
+                //     indices.transferFamily = i;
+                // }
 
                 // Checks for a queue family for presenting to the surface
                 VkBool32 presentSupport = false;
@@ -655,6 +662,7 @@ class HelloTriangleApplication {
                 if (presentSupport) {
                     indices.presentFamily = i;
                 }
+
                 // If the queue families with the requirements is already assigned
                 if (indices.isComplete()) {
                     break;
@@ -1340,44 +1348,128 @@ class HelloTriangleApplication {
             }
         }
 
-        // Allocates memory for buffer used for vertex data
-        void createVertexBuffer() {
+        /**
+         * @brief Used of create buffer and its memory
+         * 
+         * @param size Size of the buffer
+         * @param usage Flags defining what the buffer is used for
+         * @param properties The required properties of the memory for the application to run
+         * @param buffer Pointer to the buffer object
+         * @param bufferMemory Pointer to the buffer memory
+         */
+        void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, 
+                VkBuffer& buffer, VkDeviceMemory& bufferMemory) {
             VkBufferCreateInfo bufferInfo{};
             bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-            bufferInfo.size = sizeof(vertices[0]) * vertices.size();
+            bufferInfo.size = size;
 
-            bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT; // Multiple usage can be defined using bitwise OR
+            bufferInfo.usage = usage; // Multiple usage can be defined using bitwise OR
             bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE; // If it can be shared between queue families
             // The flags parameter is used to configure sparse buffer memory, which is not relevant right now. 
             // We'll leave it at the default value of 0
-
-            if (vkCreateBuffer(device, &bufferInfo, nullptr, &vertexBuffer) != VK_SUCCESS) {
-                throw std::runtime_error("failed to create vertex buffer!");
+            if (vkCreateBuffer(device, &bufferInfo, nullptr, &buffer) != VK_SUCCESS) {
+                throw std::runtime_error("failed to create buffer!");
             }
+
             // Memory requirements of the buffer 
             VkMemoryRequirements memRequirements;
-            vkGetBufferMemoryRequirements(device, vertexBuffer, &memRequirements);
+            vkGetBufferMemoryRequirements(device, buffer, &memRequirements);
 
             VkMemoryAllocateInfo allocInfo{};
             allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
             allocInfo.allocationSize = memRequirements.size;
-            allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, 
-                                                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | // Ability to write from CPU
-                                                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT); // Ability to map the memory
-            
-            if (vkAllocateMemory(device, &allocInfo, nullptr, &vertexBufferMemory) != VK_SUCCESS) {
+            allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties); 
+
+            // It should be noted that in a real world application, you're not supposed to actually 
+            // call "vkAllocateMemory" for every individual buffer
+            // 
+            // The right way to allocate memory for a large number of objects at the same time is to create 
+            // a custom allocator that splits up a single allocation among many different objects by using the 
+            // offset parameters that we've seen in many functions.
+            // You can either implement such an allocator yourself, or use the VulkanMemoryAllocator library 
+            // provided by the GPUOpen initiative
+            if (vkAllocateMemory(device, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) {
                 throw std::runtime_error("failed to allocate vertex buffer memory!");
             }
             // Binding the memory to the buffer
-            vkBindBufferMemory(device, vertexBuffer, vertexBufferMemory, 0);
+            vkBindBufferMemory(device, buffer, bufferMemory, 0);
+        }
+
+        // Allocates memory for buffer used for vertex data
+        void createVertexBuffer() {
+            VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
+            // A temporary buffer visible to the CPU for copying the vertex data to the GPU's buffer
+            VkBuffer stagingBuffer;
+            VkDeviceMemory stagingBufferMemory;
+            createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, // The buffer is used as source for memory transfer operation
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, // Buffer is accesible by CPU
+                stagingBuffer, stagingBufferMemory);
 
             // Mapping the buffer memory into CPU accessible memory with vkMapMemory
             void* data;
-            vkMapMemory(device, vertexBufferMemory, 0, bufferInfo.size, 0, &data);
+            vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
             // Copy the vertex data to the mapped memory
-            memcpy(data, vertices.data(), (size_t) bufferInfo.size);
+            memcpy(data, vertices.data(), (size_t) bufferSize);
             // Unmap the memory
-            vkUnmapMemory(device, vertexBufferMemory);
+            vkUnmapMemory(device, stagingBufferMemory);
+
+            // Creating the vertex buffer in the GPU that is not accessible by CPU
+            createBuffer(bufferSize, 
+                // The buffer is used as destination for memory transfer operation and for storing vertex data
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, 
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,  
+                vertexBuffer, vertexBufferMemory);
+            
+            copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
+            
+            vkDestroyBuffer(device, stagingBuffer, nullptr);
+            vkFreeMemory(device, stagingBufferMemory, nullptr);
+        }
+
+        /**
+         * Used to copy data from one buffer to another
+         * Primarily used to copy data from stagingBuffer to device buffer
+         * It is necessary for the buffers to have the proper flags:
+         * -VK_BUFFER_USAGE_TRANSFER_SRC_BIT for Source
+         * -VK_BUFFER_USAGE_TRANSFER_DST_BIT for destination
+         * 
+         * @param srcBuffer Source of the data
+         * @param dstBuffer Destination of the data
+         * @param size Size of the buffers
+         */
+        void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size) {
+            // Creating a temporary command buffer to perform memory transfer from staging buffer to GPU buffer
+            VkCommandBufferAllocateInfo allocInfo{};
+            allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+            allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            allocInfo.commandPool = commandPool;
+            allocInfo.commandBufferCount = 1;
+
+            VkCommandBuffer commandBuffer;
+            vkAllocateCommandBuffers(device, &allocInfo, &commandBuffer);
+
+            VkCommandBufferBeginInfo beginInfo{};
+            beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT; // Flagging for one time use
+
+            vkBeginCommandBuffer(commandBuffer, &beginInfo);
+                VkBufferCopy copyRegion{};
+                copyRegion.srcOffset = 0; // Optional
+                copyRegion.dstOffset = 0; // Optional
+                copyRegion.size = size;
+                vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
+            vkEndCommandBuffer(commandBuffer);
+
+            // Execute the above memory transfer command
+            VkSubmitInfo submitInfo{};
+            submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            submitInfo.commandBufferCount = 1;
+            submitInfo.pCommandBuffers = &commandBuffer;
+
+            vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+            vkQueueWaitIdle(graphicsQueue);
+            // The command buffer is not used again so freeing up the memory
+            vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
         }
 
         // combine the requirements of the buffer and our own application requirements 
