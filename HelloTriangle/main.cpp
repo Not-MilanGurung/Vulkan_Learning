@@ -124,18 +124,21 @@ struct Vertex {
     }
 };
 
+
 // interleaving vertex attributes
 // Position and color
 const std::vector<Vertex> vertices = {
-    // Bottom triangle
-    {{0.5f, -0.5f}, {1.0f, 0.0f, 1.0f}},
-    {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
-    {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
-    // Top triangles
-    {{-0.5f, -0.5f}, {0.5f, 0.0f, 1.0f}},
-    {{0.5f, -0.5f}, {0.0f, 1.0f, 0.5f}},
-    {{-0.5f, 0.5f}, {1.0f, 0.5f, 1.0f}}
+    {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},   // Top left, red, index 0
+    {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},    // Top rigth, green, index 1
+    {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},     // Bottom right, blue, index 2
+    {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}     // Bottom left, white, index 3
 };
+// Indices of the vertices of each triangle
+// Possible to use uint32_t if more unique indices are present
+const std::vector<uint16_t> indices = {
+    0, 1, 2, 2, 3, 0
+};
+
 
 class HelloTriangleApplication {
     public:
@@ -178,8 +181,14 @@ class HelloTriangleApplication {
         VkCommandPool commandPool; // Manages the memory allocated to command buffers
         std::vector<VkCommandBuffer> commandBuffers;
 
+
+        // For effeciency it is suggested to use a single VkBuffer to store both vertices and indices buffers
+        // This can be done using offsets and flags
         VkBuffer vertexBuffer;
         VkDeviceMemory vertexBufferMemory;
+        // Stores indices of the vertices used to make a triangle
+        VkBuffer indexBuffer;
+        VkDeviceMemory indexBufferMemory;
 
         std::vector<VkSemaphore> imageAvailableSemaphores; // Semaphores to signal that image has been acquired from swapchain
         std::vector<VkSemaphore> renderFinishedSemaphores; // Semaphores to signal the rendering is done and ready to be presented
@@ -227,6 +236,7 @@ class HelloTriangleApplication {
             createFramebuffers();
             createCommandPool();
             createVertexBuffer();
+            createIndexBuffer();
             createCommandBuffer(); // Creates a single command buffer
             createSyncObjects();
         }
@@ -249,6 +259,9 @@ class HelloTriangleApplication {
         void cleanup() {
 
             cleanupSwapChain();
+
+            vkDestroyBuffer(device, indexBuffer, nullptr);
+            vkFreeMemory(device, indexBufferMemory, nullptr);
 
             vkDestroyBuffer(device, vertexBuffer, nullptr);
             vkFreeMemory(device, vertexBufferMemory, nullptr);
@@ -1425,6 +1438,33 @@ class HelloTriangleApplication {
             vkDestroyBuffer(device, stagingBuffer, nullptr);
             vkFreeMemory(device, stagingBufferMemory, nullptr);
         }
+        // For creating a temporary staging buffer to map the indices data onto
+        // Then creating the actual index buffer and copying the data from the staging buffer
+        // This allows the actual index to be GPU exclusive for better performance
+        void createIndexBuffer() {
+            VkDeviceSize bufferSize = sizeof(indices[0]) * indices.size();
+            // A temporary buffer accesible by CPU to map and copy the data from the indices array
+            VkBuffer stagingBuffer;
+            VkDeviceMemory stagingBufferMemory;
+            createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, 
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 
+                stagingBuffer, stagingBufferMemory);
+
+            // Copying the indices data to the staging buffer to then copy to GPU exclusive buffer
+            void* data;
+            vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
+            memcpy(data, indices.data(), (size_t) bufferSize);
+            vkUnmapMemory(device, stagingBufferMemory);
+
+            // Creating the actual buffer exclusive to the GPU
+            createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, 
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, indexBuffer, indexBufferMemory);
+            // Copying the data from the staging buffer to the actual buffer
+            copyBuffer(stagingBuffer, indexBuffer, bufferSize);
+            // Freeing the memory used by the stagingBuffer
+            vkDestroyBuffer(device, stagingBuffer, nullptr);
+            vkFreeMemory(device, stagingBufferMemory, nullptr);
+        }
 
         /**
          * Used to copy data from one buffer to another
@@ -1598,7 +1638,9 @@ class HelloTriangleApplication {
                 VkDeviceSize offsets[] = {0};
                 vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
 
-                vkCmdDraw(commandBuffer, static_cast<uint32_t>(vertices.size()), 1, 0, 0);
+                vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT16);
+
+                vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
 
             vkCmdEndRenderPass(commandBuffer);  // End the render pass
 
