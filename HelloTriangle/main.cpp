@@ -15,7 +15,17 @@
 #include <limits> // Necessary for std::numeric_limits
 #include <algorithm> // Necessary for std::clamp
 #include <fstream>  // For reading the SPIR-V byte code
+
+// The GLM_FORCE_RADIANS definition is necessary to make sure that functions like glm::rotate use radians as arguments,
+//  to avoid any possible confusion.
+#define GLM_FORCE_RADIANS
 #include <glm/glm.hpp> // Linear algebra
+// The glm/gtc/matrix_transform.hpp header exposes functions that can be used to generate model transformations 
+// like glm::rotate, view transformations like glm::lookAt and projection transformations like glm::perspective. 
+#include <glm/gtc/matrix_transform.hpp>
+// The chrono standard library header exposes functions to do precise timekeeping. We'll use this to make sure 
+// that the geometry rotates 90 degrees per second regardless of frame rate.
+#include <chrono>
 
 const uint32_t WIDTH = 800; // Defining the width of the GLFW window
 const uint32_t HEIGHT = 600; // Defining the height of the GLFW window
@@ -139,6 +149,12 @@ const std::vector<uint16_t> indices = {
     0, 1, 2, 2, 3, 0
 };
 
+// Setting the descriptor to modify the vertices when the model is transformed
+struct UniformBufferObject {
+    glm::mat4 model;
+    glm::mat4 view;
+    glm::mat4 proj;
+};
 
 class HelloTriangleApplication {
     public:
@@ -172,6 +188,8 @@ class HelloTriangleApplication {
         std::vector<VkImageView> swapChainImageViews; // Stores Image views. Needs to be cleaned up
 
         VkRenderPass renderPass;
+
+        VkDescriptorSetLayout descriptorSetLayout; // Holds all the descriptor bindings
         VkPipelineLayout pipelineLayout;
 
         VkPipeline graphicsPipeline;
@@ -189,6 +207,11 @@ class HelloTriangleApplication {
         // Stores indices of the vertices used to make a triangle
         VkBuffer indexBuffer;
         VkDeviceMemory indexBufferMemory;
+
+        std::vector<VkBuffer> uniformBuffers;
+        std::vector<VkDeviceMemory> uniformBuffersMemory;
+        std::vector<void*> uniformBuffersMapped;
+
 
         std::vector<VkSemaphore> imageAvailableSemaphores; // Semaphores to signal that image has been acquired from swapchain
         std::vector<VkSemaphore> renderFinishedSemaphores; // Semaphores to signal the rendering is done and ready to be presented
@@ -232,11 +255,13 @@ class HelloTriangleApplication {
             createSwapChain(); // Creates the swap chain
             createImageViews();
             createRenderPass();
+            createDescriptorSetLayout();
             createGraphicsPipeline();
             createFramebuffers();
             createCommandPool();
             createVertexBuffer();
             createIndexBuffer();
+            createUniformBuffer();
             createCommandBuffer(); // Creates a single command buffer
             createSyncObjects();
         }
@@ -259,6 +284,13 @@ class HelloTriangleApplication {
         void cleanup() {
 
             cleanupSwapChain();
+
+            for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+                vkDestroyBuffer(device, uniformBuffers[i], nullptr);
+                vkFreeMemory(device, uniformBuffersMemory[i], nullptr);
+            }
+
+            vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
 
             vkDestroyBuffer(device, indexBuffer, nullptr);
             vkFreeMemory(device, indexBufferMemory, nullptr);
@@ -329,6 +361,7 @@ class HelloTriangleApplication {
             // Reset the fence indicating the start of the frame
             // Only reset fence if we are subbmiting the work
             vkResetFences(device, 1, &inFlightFences[currentFrame]);
+            updateUniformBuffer(currentFrame);
 
             vkResetCommandBuffer(commandBuffers[currentFrame], /*VkCommandBufferResetFlagBits*/ 0);
             recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
@@ -384,6 +417,26 @@ class HelloTriangleApplication {
             currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT; // Advance to next frame in flight and not exceed the max frames in flight
         }
 
+        void updateUniformBuffer(uint32_t currentImage) {
+
+            static auto startTime = std::chrono::high_resolution_clock::now();
+
+            auto currentTime = std::chrono::high_resolution_clock::now();
+            float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
+
+            UniformBufferObject ubo{};
+            // Rotates 90 degree per second
+            ubo.model =  glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+            // For the view transformation I've decided to look at the geometry from above at a 45 degree angle. 
+            // The glm::lookAt function takes the eye position, center position and up axis as parameters.
+            ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+
+            ubo.proj = glm::perspective(glm::radians(45.0f), swapChainExtent.width / (float) swapChainExtent.height, 0.1f, 10.0f);
+ 
+            ubo.proj[1][1] *= -1; //GLM was originally designed for OpenGL, where the Y coordinate of the clip coordinates is inverted
+
+            memcpy(uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
+        }
         // Function to create a vulkan instance
         void createInstance() {
             // For validation layers
@@ -1054,6 +1107,30 @@ class HelloTriangleApplication {
             }
         }
 
+        // Creating a descriptor set layout used for defining MVP transformation
+        void createDescriptorSetLayout() {
+            VkDescriptorSetLayoutBinding uboLayoutBinding{};
+            uboLayoutBinding.binding = 0; // Binding of the uniform buffer in the vertex shader
+            uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            // The binding/ shader variable can represent an array of uniform buffers that each define separate transformation
+            uboLayoutBinding.descriptorCount = 1;
+
+            // Specifies in which stage the descriptor is referenced
+            // can be a combination of VkShaderStageFlagBits values or the value VK_SHADER_STAGE_ALL_GRAPHICS
+            uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
+            uboLayoutBinding.pImmutableSamplers = nullptr; // Used for image sampling descriptors
+
+            VkDescriptorSetLayoutCreateInfo layoutInfo{};
+            layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            layoutInfo.bindingCount = 1;
+            layoutInfo.pBindings = &uboLayoutBinding;
+
+            if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &descriptorSetLayout) != VK_SUCCESS) {
+                throw std::runtime_error("failed to create descriptor set layout!");
+            }
+        }
+
         void createGraphicsPipeline() {
             // Reading the byte code and storing them
             auto vertShaderCode = readFile("shaders/vert.spv"); // For storing vertex shader byte code
@@ -1229,8 +1306,8 @@ class HelloTriangleApplication {
             // Empty pipeline layout for future use
             VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
             pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-            pipelineLayoutInfo.setLayoutCount = 0; // Optional
-            pipelineLayoutInfo.pSetLayouts = nullptr; // Optional
+            pipelineLayoutInfo.setLayoutCount = 1; 
+            pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;
             pipelineLayoutInfo.pushConstantRangeCount = 0; // Optional
             pipelineLayoutInfo.pPushConstantRanges = nullptr; // Optional
 
@@ -1531,6 +1608,22 @@ class HelloTriangleApplication {
             }
 
             throw std::runtime_error("failed to find suitable memory type!");
+        }
+
+        void createUniformBuffer() {
+            VkDeviceSize bufferSize = sizeof(UniformBufferObject);
+
+            uniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+            uniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
+            uniformBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
+
+            for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+                createBuffer(bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 
+                    uniformBuffers[i], uniformBuffersMemory[i]);
+
+                vkMapMemory(device, uniformBuffersMemory[i], 0, bufferSize, 0, &uniformBuffersMapped[i]);
+            }
         }
 
         void createCommandBuffer() {

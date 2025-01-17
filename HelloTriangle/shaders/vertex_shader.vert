@@ -2,6 +2,12 @@
 
 // Global variables for input and output
 
+layout(binding = 0) uniform UniformBufferObject {
+    mat4 model;
+    mat4 view;
+    mat4 proj;
+} ubo;
+
 layout(location = 0) in vec2 inPosition;
 layout(location = 1) in vec3 inColor;
 
@@ -12,7 +18,8 @@ void main() {
     // gl_VertexIndex is a built in variable that holds the value of the current index
     // The main function is run for every vertex
     // The last values 0.0, 1.0 and dummy z and w components 
-    gl_Position = vec4(inPosition, 0.0, 1.0);
+    // A MVP transformation is done with the uniform buffer object
+    gl_Position = ubo.proj * ubo.view * ubo.model * vec4(inPosition, 0.0, 1.0);
     // Giving the color of the vertices to the global output variable
     fragColor = inColor;
 }

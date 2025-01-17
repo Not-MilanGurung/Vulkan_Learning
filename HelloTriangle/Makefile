@@ -8,8 +8,8 @@ DEBUG_PARAMETER = -g -UNDEBUG
 # -DNDEBUG is used to define NDEBUG (not debug) to disable validation layers
 # NDEBUG is also tied with assertions
 RELEASE_PARAMETER = -DNDEBUG
-DEBUGFILE = VulkanTest	# Name of the compiled program in debug phase
-RELEASEFILE = VulkanTestR	# Name of the compiled program in release phase
+DEBUGFILE = VulkanTest.out	# Name of the compiled program in debug phase
+RELEASEFILE = VulkanTestR.out	# Name of the compiled program in release phase
 
 # Runs when running the "make" command in the directory 
 # Compiles the program with validation layers and debug
