@@ -1,9 +1,21 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
+// The GLM_FORCE_RADIANS definition is necessary to make sure that functions like glm::rotate use radians as arguments,
+//  to avoid any possible confusion.
+#define GLM_FORCE_RADIANS
+#include <glm/glm.hpp> // Linear algebra
+// The glm/gtc/matrix_transform.hpp header exposes functions that can be used to generate model transformations 
+// like glm::rotate, view transformations like glm::lookAt and projection transformations like glm::perspective. 
+#include <glm/gtc/matrix_transform.hpp>
 
 // For catching and reporting errors
 #include <iostream>
+#include <fstream>  // For reading the SPIR-V byte code
 #include <stdexcept>
+#include <algorithm> // Necessary for std::clamp
+// The chrono standard library header exposes functions to do precise timekeeping. We'll use this to make sure 
+// that the geometry rotates 90 degrees per second regardless of frame rate.
+#include <chrono>
 #include <vector>   // For creating arrays
 #include <map>      // For creating maps
 #include <cstring>
@@ -13,19 +25,7 @@
 #include <cstdlib>
 #include <cstdint> // Necessary for uint32_t
 #include <limits> // Necessary for std::numeric_limits
-#include <algorithm> // Necessary for std::clamp
-#include <fstream>  // For reading the SPIR-V byte code
 
-// The GLM_FORCE_RADIANS definition is necessary to make sure that functions like glm::rotate use radians as arguments,
-//  to avoid any possible confusion.
-#define GLM_FORCE_RADIANS
-#include <glm/glm.hpp> // Linear algebra
-// The glm/gtc/matrix_transform.hpp header exposes functions that can be used to generate model transformations 
-// like glm::rotate, view transformations like glm::lookAt and projection transformations like glm::perspective. 
-#include <glm/gtc/matrix_transform.hpp>
-// The chrono standard library header exposes functions to do precise timekeeping. We'll use this to make sure 
-// that the geometry rotates 90 degrees per second regardless of frame rate.
-#include <chrono>
 
 const uint32_t WIDTH = 800; // Defining the width of the GLFW window
 const uint32_t HEIGHT = 600; // Defining the height of the GLFW window
@@ -150,10 +150,11 @@ const std::vector<uint16_t> indices = {
 };
 
 // Setting the descriptor to modify the vertices when the model is transformed
+// alignas function is there to align the data as specified by vulkan
 struct UniformBufferObject {
-    glm::mat4 model;
-    glm::mat4 view;
-    glm::mat4 proj;
+    alignas(16) glm::mat4 model;
+    alignas(16) glm::mat4 view;
+    alignas(16) glm::mat4 proj;
 };
 
 class HelloTriangleApplication {
@@ -186,6 +187,7 @@ class HelloTriangleApplication {
         VkExtent2D swapChainExtent; // Extent, size of the image of the swapchain in pixels
 
         std::vector<VkImageView> swapChainImageViews; // Stores Image views. Needs to be cleaned up
+        std::vector<VkFramebuffer> swapChainFramebuffers; // Frame buffer
 
         VkRenderPass renderPass;
 
@@ -194,7 +196,6 @@ class HelloTriangleApplication {
 
         VkPipeline graphicsPipeline;
 
-        std::vector<VkFramebuffer> swapChainFramebuffers; // Frame buffer
 
         VkCommandPool commandPool; // Manages the memory allocated to command buffers
         std::vector<VkCommandBuffer> commandBuffers;
@@ -212,6 +213,8 @@ class HelloTriangleApplication {
         std::vector<VkDeviceMemory> uniformBuffersMemory;
         std::vector<void*> uniformBuffersMapped;
 
+        VkDescriptorPool descriptorPool;
+        std::vector<VkDescriptorSet> descriptorSets;
 
         std::vector<VkSemaphore> imageAvailableSemaphores; // Semaphores to signal that image has been acquired from swapchain
         std::vector<VkSemaphore> renderFinishedSemaphores; // Semaphores to signal the rendering is done and ready to be presented
@@ -261,7 +264,9 @@ class HelloTriangleApplication {
             createCommandPool();
             createVertexBuffer();
             createIndexBuffer();
-            createUniformBuffer();
+            createUniformBuffers();
+            createDescriptorPool();
+            createDescriptorSets();
             createCommandBuffer(); // Creates a single command buffer
             createSyncObjects();
         }
@@ -285,10 +290,19 @@ class HelloTriangleApplication {
 
             cleanupSwapChain();
 
+            // Destroys the graphics pipeline
+            vkDestroyPipeline(device, graphicsPipeline, nullptr);
+            // Destroys the pipeline layout
+            vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
+
+            // Destroys the render pass
+            vkDestroyRenderPass(device, renderPass, nullptr);
+
             for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
                 vkDestroyBuffer(device, uniformBuffers[i], nullptr);
                 vkFreeMemory(device, uniformBuffersMemory[i], nullptr);
             }
+            vkDestroyDescriptorPool(device, descriptorPool, nullptr); // Also frees up the descriptor sets associated with it
 
             vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
 
@@ -298,13 +312,6 @@ class HelloTriangleApplication {
             vkDestroyBuffer(device, vertexBuffer, nullptr);
             vkFreeMemory(device, vertexBufferMemory, nullptr);
 
-            // Destroys the graphics pipeline
-            vkDestroyPipeline(device, graphicsPipeline, nullptr);
-            // Destroys the pipeline layout
-            vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
-
-            // Destroys the render pass
-            vkDestroyRenderPass(device, renderPass, nullptr);
 
             // Destroys the syncronisation objects
             for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
@@ -358,10 +365,10 @@ class HelloTriangleApplication {
                 throw std::runtime_error("failed to acquire swap chain image!");
             }
 
+            updateUniformBuffer(currentFrame);
             // Reset the fence indicating the start of the frame
             // Only reset fence if we are subbmiting the work
             vkResetFences(device, 1, &inFlightFences[currentFrame]);
-            updateUniformBuffer(currentFrame);
 
             vkResetCommandBuffer(commandBuffers[currentFrame], /*VkCommandBufferResetFlagBits*/ 0);
             recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
@@ -1234,6 +1241,7 @@ class HelloTriangleApplication {
             VkPipelineRasterizationStateCreateInfo rasterizer{};
             rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
             rasterizer.depthClampEnable = VK_FALSE;
+            rasterizer.rasterizerDiscardEnable = VK_FALSE;
             /**
              * The polygonMode determines how fragments are generated for geometry. 
              * The following modes are available:
@@ -1247,13 +1255,10 @@ class HelloTriangleApplication {
             rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
             rasterizer.lineWidth = 1.0f; // Thicknes of lines in terms of fragmet shader
             rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
-            rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+            rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        
 
             rasterizer.depthBiasEnable = VK_FALSE;
-            rasterizer.depthBiasConstantFactor = 0.0f; // Optional
-            rasterizer.depthBiasClamp = 0.0f; // Optional
-            rasterizer.depthBiasSlopeFactor = 0.0f; // Optional
-
             // Multisampling for anitaliasing
             // Requires a GPU feature
             // Disabled for now
@@ -1610,7 +1615,7 @@ class HelloTriangleApplication {
             throw std::runtime_error("failed to find suitable memory type!");
         }
 
-        void createUniformBuffer() {
+        void createUniformBuffers() {
             VkDeviceSize bufferSize = sizeof(UniformBufferObject);
 
             uniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
@@ -1623,6 +1628,59 @@ class HelloTriangleApplication {
                     uniformBuffers[i], uniformBuffersMemory[i]);
 
                 vkMapMemory(device, uniformBuffersMemory[i], 0, bufferSize, 0, &uniformBuffersMapped[i]);
+            }
+        }
+
+        void createDescriptorPool() {
+            VkDescriptorPoolSize poolSize{};
+            poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            poolSize.descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+
+            VkDescriptorPoolCreateInfo poolInfo{};
+            poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+            poolInfo.poolSizeCount = 1;
+            poolInfo.pPoolSizes = &poolSize;
+
+            poolInfo.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+
+            if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
+                throw std::runtime_error("failed to create descriptor pool!");
+            }
+        }
+
+        void createDescriptorSets() {
+            std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, descriptorSetLayout);
+            VkDescriptorSetAllocateInfo allocInfo{};
+            allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            allocInfo.descriptorPool = descriptorPool;
+            allocInfo.descriptorSetCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+            allocInfo.pSetLayouts = layouts.data();
+
+            descriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
+            if (vkAllocateDescriptorSets(device, &allocInfo, descriptorSets.data()) != VK_SUCCESS) {
+                throw std::runtime_error("failed to allocate descriptor sets!");
+            }  
+
+            for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+                VkDescriptorBufferInfo bufferInfo{};
+                bufferInfo.buffer = uniformBuffers[i];
+                bufferInfo.offset = 0;
+                bufferInfo.range = sizeof(UniformBufferObject);
+
+                VkWriteDescriptorSet descriptorWrite{};
+                descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                descriptorWrite.dstSet = descriptorSets[i];
+                descriptorWrite.dstBinding = 0;
+                descriptorWrite.dstArrayElement = 0;
+
+                descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                descriptorWrite.descriptorCount = 1;
+
+                descriptorWrite.pBufferInfo = &bufferInfo;
+                descriptorWrite.pImageInfo = nullptr; // Optional
+                descriptorWrite.pTexelBufferView = nullptr; // Optional
+
+                vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
             }
         }
 
@@ -1732,6 +1790,9 @@ class HelloTriangleApplication {
                 vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
 
                 vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT16);
+
+                vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1,
+                    &descriptorSets[currentFrame], 0, nullptr);
 
                 vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
 
