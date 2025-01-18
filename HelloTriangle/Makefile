@@ -1,5 +1,5 @@
 CFLAGS = -std=c++23 -O2 # Defining the version of C++
-LDFLAGS = -lglfw -lvulkan -ldl -lpthread -lX11 -lXxf86vm -lXrandr -lXi # Defining the libraries used
+LDFLAGS = -lglfw -lvulkan -ldl -lpthread -lX11 -lXxf86vm -lXrandr -lXi # Linking the libraries
 
 # -g is used by g++ to signal debug 
 # -UNDEBUG means NDEBUG is not defined for the compiled program
