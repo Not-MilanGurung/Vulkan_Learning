@@ -216,6 +216,9 @@ class HelloTriangleApplication {
         VkImage textureImage;
         VkDeviceMemory textureImageMemory;
 
+        VkImageView textureImageView;
+        VkSampler textureSampler;
+
         std::vector<VkBuffer> uniformBuffers;
         std::vector<VkDeviceMemory> uniformBuffersMemory;
         std::vector<void*> uniformBuffersMapped;
@@ -270,6 +273,8 @@ class HelloTriangleApplication {
             createFramebuffers();
             createCommandPool();
             createTextureImage();
+            createTextureImageView();
+            createTextureSampler();
             createVertexBuffer();
             createIndexBuffer();
             createUniformBuffers();
@@ -297,7 +302,8 @@ class HelloTriangleApplication {
         void cleanup() {
 
             cleanupSwapChain();
-
+            vkDestroySampler(device, textureSampler, nullptr);
+            vkDestroyImageView(device, textureImageView, nullptr);
             vkDestroyImage(device, textureImage, nullptr);
             vkFreeMemory(device, textureImageMemory, nullptr);
             // Destroys the graphics pipeline
@@ -684,7 +690,11 @@ class HelloTriangleApplication {
 
             // Maximum possible size of textures affects graphics quality
             score += deviceProperties.limits.maxImageDimension2D;
-
+            
+            // Support for sampler anisotropy
+            if (!deviceFeatures.samplerAnisotropy) {
+                return 0;
+            }
             // Application can't function without geometry shaders
             if (!deviceFeatures.geometryShader) {
                 return 0;
@@ -797,7 +807,8 @@ class HelloTriangleApplication {
                 queueCreateInfos.push_back(queueCreateInfo); // Adding the struct to the vector
             }
 
-            VkPhysicalDeviceFeatures deviceFeatures{}; // Features required, empty for now
+            VkPhysicalDeviceFeatures deviceFeatures{}; // Features required
+            deviceFeatures.samplerAnisotropy = VK_TRUE;
 
             // Creating the structure of the logical device to be created
             VkDeviceCreateInfo createInfo{};
@@ -1094,33 +1105,8 @@ class HelloTriangleApplication {
             swapChainImageViews.resize(swapChainImages.size()); 
 
             // Looping over the images in swap chain and creating their image views
-            for (size_t i = 0; i < swapChainImages.size(); i++) {
-                VkImageViewCreateInfo createInfo{};
-                createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-                createInfo.image = swapChainImages[i];
-
-                // Specifying how the image is interperted
-                createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;    // Using image as 2D texture
-                createInfo.format = swapChainImageFormat;       // The format of swap chain image
-
-                // Components allows to swizzle color channels
-                // Using the default value right now
-                createInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;    // Red channel
-                createInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;    // Green channel
-                createInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;    // Blue channel
-                createInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;    // Alpha channel
-
-                // Used to define the purpose of the image
-                // Right now using image as color target without mipmapping
-                createInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                createInfo.subresourceRange.baseMipLevel = 0;
-                createInfo.subresourceRange.levelCount = 1;
-                createInfo.subresourceRange.baseArrayLayer = 0;
-                createInfo.subresourceRange.layerCount = 1;
-
-                if (vkCreateImageView(device, &createInfo, nullptr, &swapChainImageViews[i]) != VK_SUCCESS) {
-                    throw std::runtime_error("failed to create image views!");
-                }
+            for (uint32_t i = 0; i < swapChainImages.size(); i++) {
+                swapChainImageViews[i] = createImageView(swapChainImages[i], swapChainImageFormat);
             }
         }
 
@@ -1609,7 +1595,76 @@ class HelloTriangleApplication {
             vkBindImageMemory(device, image, imageMemory, 0);
         }
 
+        void createTextureImageView() {
+            textureImageView = createImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB);
+        }
+
+        VkImageView createImageView(VkImage image, VkFormat format) {
+            VkImageViewCreateInfo viewInfo{};
+            viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            viewInfo.image = image;
+            viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            viewInfo.format = format;
+            viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            viewInfo.subresourceRange.baseMipLevel = 0;
+            viewInfo.subresourceRange.levelCount = 1;
+            viewInfo.subresourceRange.baseArrayLayer = 0;
+            viewInfo.subresourceRange.layerCount = 1;
+
+            VkImageView imageView;
+            if (vkCreateImageView(device, &viewInfo, nullptr, &imageView) != VK_SUCCESS) {
+                throw std::runtime_error("failed to create texture image view!");
+            }
+
+            return imageView;
+        }
         
+        // Samples the texture image, applies filters and passes on to the gpu
+        void createTextureSampler() {
+            VkSamplerCreateInfo samplerInfo{};
+            samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+            // The magFilter and minFilter fields specify how to interpolate texels that are magnified or minified. 
+            samplerInfo.magFilter = VK_FILTER_LINEAR;
+            samplerInfo.minFilter = VK_FILTER_LINEAR;
+
+            // This is a convention for texture space coordinates.
+            // 
+            // VK_SAMPLER_ADDRESS_MODE_REPEAT: Repeat the texture when going beyond the image dimensions.
+            // VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT: Like repeat, but inverts the coordinates to mirror the image when going beyond the dimensions.
+            // VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE: Take the color of the edge closest to the coordinate beyond the image dimensions.
+            // VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE: Like clamp to edge, but instead uses the edge opposite to the closest edge.
+            // VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER: Return a solid color when sampling beyond the dimensions of the image.
+            samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            samplerInfo.anisotropyEnable = VK_TRUE;
+            // The maxAnisotropy field limits the amount of texel samples that can be used to calculate the 
+            // final color. A lower value results in better performance, but lower quality results.
+            VkPhysicalDeviceProperties properties{};
+            vkGetPhysicalDeviceProperties(physicalDevice, &properties);
+            samplerInfo.maxAnisotropy = properties.limits.maxSamplerAnisotropy;
+
+            samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+            // The unnormalizedCoordinates field specifies which coordinate system you want to use to address 
+            // texels in an image. If this field is VK_TRUE, then you can simply use coordinates within 
+            // the [0, texWidth) and [0, texHeight) range. If it is VK_FALSE, then the texels are addressed 
+            // using the [0, 1) range on all axes.
+            samplerInfo.unnormalizedCoordinates = VK_FALSE;
+
+            samplerInfo.compareEnable = VK_FALSE;
+            samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
+
+            samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+            samplerInfo.mipLodBias = 0.0f;
+            samplerInfo.minLod = 0.0f;
+            samplerInfo.maxLod = 0.0f;
+
+            if (vkCreateSampler(device, &samplerInfo, nullptr, &textureSampler) != VK_SUCCESS) {
+                throw std::runtime_error("failed to create texture sampler!");
+            }
+        }
+
+
         // Allocates memory for buffer used for vertex data
         void createVertexBuffer() {
             VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
