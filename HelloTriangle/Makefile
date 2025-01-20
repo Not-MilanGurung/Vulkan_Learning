@@ -10,7 +10,7 @@ DEBUG_PARAMETER = -g -UNDEBUG
 RELEASE_PARAMETER = -DNDEBUG
 DEBUGFILE = VulkanTest.out	# Name of the compiled program in debug phase
 RELEASEFILE = VulkanTestR.out	# Name of the compiled program in release phase
-
+QUICK = VulkanTestQuick.out
 # Runs when running the "make" command in the directory 
 # Compiles the program with validation layers and debug
 VulkanTest: main.cpp
@@ -18,8 +18,10 @@ VulkanTest: main.cpp
 
 # Defines the additional functions that can be used with the "make" command
 # E.g.:  "make test" runs the test command defined below
-.PHONY: test clean release rel
+.PHONY: test clean release rel quick q
 
+q:
+	g++ -std=c++23 $(RELEASE_PARAMETER) -o $(QUICK) main.cpp $(LDFLAGS) 
 # For compiling program without validation layers
 release: 
 	g++ $(CFLAGS) $(RELEASE_PARAMETER) -o $(RELEASEFILE) main.cpp $(LDFLAGS)
@@ -35,3 +37,6 @@ clean:
 # Runs the compiled release-program
 rel: 
 	./$(RELEASEFILE)
+
+quick:
+	./$(QUICK)
